@@ -73,11 +73,28 @@
       </div>
     </div>
 
+    <!-- Hidden measurement container for width calculations -->
+    <div 
+      ref="measurementContainer" 
+      class="measurement-container"
+      aria-hidden="true"
+    ></div>
+
     <!-- Debug info (optional) -->
     <div v-if="showDebugInfo" class="debug-info">
       <p><strong>Caret Position:</strong> {{ caretPosition }}</p>
-      <p><strong>Text Length:</strong> {{ text.length }}</p>
+      <p><strong>Rendered Text Length:</strong> {{ renderedText.length }}</p>
+      <p><strong>Original Text Length:</strong> {{ originalText.length }}</p>
       <p><strong>Popup Position:</strong> {{ popupPosition }}</p>
+      <p><strong>Character Width:</strong> {{ CHAR_WIDTH_PX }}px</p>
+      <p><strong>Fixed ID Width:</strong> {{ FIXED_ID_TOTAL_WIDTH }} chars</p>
+      <p><strong>Next ID:</strong> [{{ (mentionIdCounter + 1).toString().padStart(ID_WIDTH, '0') }}]</p>
+      <div class="debug-texts">
+        <div><strong>Rendered Text:</strong> <code>{{ renderedText }}</code></div>
+        <div><strong>Original Text:</strong> <code>{{ originalText }}</code></div>
+        <div><strong>Mention Mapping:</strong> <code>{{ JSON.stringify(mentionMapping, null, 2) }}</code></div>
+        <div><strong>Width Mapping:</strong> <code>{{ JSON.stringify(mentionWidthMapping, null, 2) }}</code></div>
+      </div>
     </div>
   </div>
 </template>
@@ -130,7 +147,8 @@ Type @ anywhere to open the mention selector!`,
 })
 
 // Reactive state
-const text = ref(props.initialText)
+const originalText = ref(props.initialText) // Store the actual user input
+const renderedText = ref(props.initialText) // Store the text with surrogate characters
 const textarea = ref<HTMLTextAreaElement | null>(null)
 const overlay = ref<HTMLPreElement | null>(null)
 const wrapper = ref<HTMLDivElement | null>(null)
@@ -142,6 +160,29 @@ const caretPosition = ref(0)
 const mentionQuery = ref('')
 const selectedMentionIndex = ref(0)
 const mentionStartPosition = ref(0)
+
+// Mapping between surrogate IDs and original mention URIs
+const mentionMapping = ref<Record<string, string>>({})
+// Mapping between surrogate IDs and target widths for precise scaling
+const mentionWidthMapping = ref<Record<string, number>>({})
+let mentionIdCounter = 0
+
+// Fixed-width ID configuration
+const ID_WIDTH = 5 // Always use 5 digits: [00001], [00002], etc.
+const ID_PREFIX = '[' 
+const ID_SUFFIX = ']'
+const FIXED_ID_TOTAL_WIDTH = ID_PREFIX.length + ID_WIDTH + ID_SUFFIX.length // "[00001]" = 7 chars
+
+// Characters used for width calculation (different widths for precision)
+const SURROGATE_CHAR = 'm' // Base character (full width)
+let THIN_CHAR = 'i' // Thinner character for fractional adjustments (will be updated)
+const SPACE_CHAR = ' ' // Space for fine-tuning
+let CHAR_WIDTH_PX = 8.4 // Will be measured dynamically
+let THIN_CHAR_WIDTH_PX = 4.2 // Will be measured dynamically
+let SPACE_WIDTH_PX = 4.2 // Will be measured dynamically
+
+// Hidden measurement container for precise width calculations
+const measurementContainer = ref<HTMLDivElement | null>(null)
 
 // Mock data for mentions (in real app, this would come from API)
 const mockMentionData = [
@@ -252,7 +293,7 @@ DOMPurify.addHook('uponSanitizeElement', (node, data) => {
 
 // Computed properties
 const decoratedContent = computed(() => {
-  const textContent = text.value || ''
+  const textContent = renderedText.value || ''
   
   if (props.readonly) {
     // Readonly mode: render markdown with mention components
@@ -288,15 +329,23 @@ const decoratedContent = computed(() => {
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;')
     
-    // Then replace mention URIs with visual components
+    // Replace surrogate patterns with visual components
     processedContent = processedContent.replace(
-      /mention:\/\/([^\/\s]+)\/([^\s]+)/g,
-      (match, type, id) => {
-        const mentionData = mockMentionData.find(item => item.id === id && item.type === type)
-        if (mentionData) {
-          return renderMentionComponent(mentionData)
+      /\[(\d{5})\]m*/g, // Match IDs with m characters (monospace font)
+      (match, surrogateId) => {
+        const originalMention = mentionMapping.value[surrogateId]
+        const targetWidth = mentionWidthMapping.value[surrogateId]
+        if (originalMention) {
+          const uriMatch = originalMention.match(/mention:\/\/([^\/\s]+)\/([^\s]+)/)
+          if (uriMatch) {
+            const [, type, id] = uriMatch
+            const mentionData = mockMentionData.find(item => item.id === id && item.type === type)
+            if (mentionData) {
+              return renderMentionComponent(mentionData, targetWidth)
+            }
+          }
         }
-        return `<span class="mention-error">Unknown ${type}: ${id}</span>`
+        return `<span class="mention-error">Unknown mention: ${surrogateId}</span>`
       }
     )
     
@@ -304,31 +353,303 @@ const decoratedContent = computed(() => {
   }
 })
 
-// Function to render mention components as HTML
-function renderMentionComponent(mentionData: any) {
+// Computed property to sync rendered text with textarea and update original text
+const text = computed({
+  get: () => renderedText.value,
+  set: (value: string) => {
+    renderedText.value = value
+    originalText.value = restoreOriginalText(value)
+  }
+})
+
+// Computed property to expose the original text for external use
+const originalTextComputed = computed(() => originalText.value)
+
+// Function to generate fixed-width ID
+function generateFixedWidthId(): string {
+  mentionIdCounter++
+  return mentionIdCounter.toString().padStart(ID_WIDTH, '0') // e.g., "00001", "00002"
+}
+
+// Function to measure actual component width by rendering it
+function measureComponentWidth(mentionData: any): Promise<number> {
+  return new Promise((resolve) => {
+    if (!measurementContainer.value) {
+      console.warn('⚠️ measurementContainer not available, using fallback width')
+      resolve(100) // fallback width
+      return
+    }
+    
+    // Create temporary element with the exact same HTML as the mention component
+    const tempElement = document.createElement('span')
+    tempElement.innerHTML = renderMentionComponent(mentionData)
+    tempElement.style.position = 'absolute'
+    tempElement.style.visibility = 'hidden'
+    tempElement.style.whiteSpace = 'nowrap'
+    
+    // Apply the same styles as the overlay
+    tempElement.style.fontFamily = 'Monaco, Menlo, Ubuntu Mono, monospace'
+    tempElement.style.fontSize = '14px'
+    tempElement.style.lineHeight = '1.5'
+    
+    measurementContainer.value.appendChild(tempElement)
+    
+    // Measure the actual rendered width
+    nextTick(() => {
+      const width = tempElement.getBoundingClientRect().width
+      console.log('📏 Component measurement:', {
+        mentionType: mentionData.type,
+        mentionTitle: mentionData.title,
+        measuredWidth: width,
+        innerHTML: tempElement.innerHTML
+      })
+      measurementContainer.value?.removeChild(tempElement)
+      resolve(width)
+    })
+  })
+}
+
+// Function to measure individual character widths precisely
+function measureCharWidth(): Promise<number> {
+  return new Promise((resolve) => {
+    if (!measurementContainer.value) {
+      console.warn('⚠️ measurementContainer not available for char width, using fallback')
+      resolve(8.4) // fallback
+      return
+    }
+    
+    const testChars = ['m', 'i', 'l', 'j', '.', ' ', '|']
+    const measurements: Record<string, number> = {}
+    
+    // Create elements for each character
+    const elements = testChars.map(char => {
+      const element = document.createElement('span')
+      element.textContent = char
+      element.style.position = 'absolute'
+      element.style.visibility = 'hidden'
+      element.style.whiteSpace = 'nowrap'
+      element.style.fontFamily = 'Monaco, Menlo, Ubuntu Mono, monospace'
+      element.style.fontSize = '14px'
+      element.style.lineHeight = '1.5'
+      measurementContainer.value!.appendChild(element)
+      return { char, element }
+    })
+    
+    nextTick(() => {
+      // Measure each character individually
+      elements.forEach(({ char, element }) => {
+        measurements[char] = element.getBoundingClientRect().width
+      })
+      
+      console.log('📐 Individual character measurements:', measurements)
+      
+      // Find the best characters for our system
+      const mainWidth = measurements['m']
+      let thinWidth = measurements['i']
+      let spaceWidth = measurements[' ']
+      
+      // Try to find a thinner character if 'i' is same width as 'm'
+      if (Math.abs(thinWidth - mainWidth) < 0.1) {
+        // Try other narrow characters
+        const narrowChars = ['l', 'j', '|', '.']
+        for (const char of narrowChars) {
+          if (measurements[char] < mainWidth * 0.8) {
+            thinWidth = measurements[char]
+            console.log(`🔍 Found thinner character '${char}' with width ${thinWidth}px`)
+            break
+          }
+        }
+      }
+      
+      console.log('📏 Selected character widths:', {
+        mainChar: 'm',
+        mainWidth,
+        thinChar: thinWidth < mainWidth * 0.8 ? 'l' : 'i', // Use 'l' if it's thinner
+        thinWidth,
+        spaceChar: 'space',
+        spaceWidth
+      })
+      
+      CHAR_WIDTH_PX = mainWidth
+      THIN_CHAR_WIDTH_PX = thinWidth
+      SPACE_WIDTH_PX = spaceWidth
+      
+      // Update the thin character if we found a better one
+      if (thinWidth < mainWidth * 0.8) {
+        // Find which character has this width
+        for (const [char, width] of Object.entries(measurements)) {
+          if (Math.abs(width - thinWidth) < 0.1) {
+            // Update the global thin char
+            const originalThinChar = THIN_CHAR
+            THIN_CHAR = char // Update to use the thinner character
+            console.log(`💡 Updated THIN_CHAR from '${originalThinChar}' to '${char}' (${width}px)`)
+            break
+          }
+        }
+      }
+      
+      // Clean up elements
+      elements.forEach(({ element }) => {
+        measurementContainer.value?.removeChild(element)
+      })
+      
+      resolve(mainWidth)
+    })
+  })
+}
+
+// Function to generate surrogate text for a mention
+async function generateSurrogateText(originalMention: string, mentionData: any): Promise<string> {
+  console.log('🔧 Starting surrogate text generation for:', mentionData.title)
+  
+  // Measure actual component width
+  const componentWidth = await measureComponentWidth(mentionData)
+  
+  // Calculate remaining width after fixed ID
+  const fixedIdWidth = FIXED_ID_TOTAL_WIDTH * CHAR_WIDTH_PX
+  const remainingWidth = componentWidth - fixedIdWidth
+  
+  // Generate unique fixed-width ID for this mention
+  const surrogateId = generateFixedWidthId()
+  
+  // Store mapping
+  mentionMapping.value[surrogateId] = originalMention
+  // Store target width for precise scaling
+  mentionWidthMapping.value[surrogateId] = componentWidth
+  
+  // Build surrogate characters to match remaining width as closely as possible
+  // Since all characters have the same width in monospace fonts, we use optimal rounding
+  
+  // Calculate exact number of characters needed for remaining width
+  const exactCharsNeeded = remainingWidth / CHAR_WIDTH_PX
+  
+  // Use smart rounding: if we're very close to the next integer, round up
+  const threshold = 0.8 // Round up if we're 80% or more to the next character
+  const optimalChars = exactCharsNeeded % 1 >= threshold 
+    ? Math.ceil(exactCharsNeeded) 
+    : Math.floor(exactCharsNeeded)
+  
+  const surrogateChars = SURROGATE_CHAR.repeat(Math.max(0, optimalChars))
+  const currentWidth = optimalChars * CHAR_WIDTH_PX
+  
+  const result = `${ID_PREFIX}${surrogateId}${ID_SUFFIX}${surrogateChars}`
+  const totalCalculatedWidth = fixedIdWidth + currentWidth
+  
+  console.log('🧮 Optimal surrogate calculation:', {
+    componentWidth,
+    fixedIdWidth,
+    remainingWidth,
+    exactCharsNeeded,
+    optimalChars,
+    fractionalPart: exactCharsNeeded % 1,
+    roundingDecision: exactCharsNeeded % 1 >= threshold ? 'ROUND_UP' : 'ROUND_DOWN',
+    surrogateChars: JSON.stringify(surrogateChars),
+    totalCalculatedWidth,
+    widthDifference: Math.abs(componentWidth - totalCalculatedWidth),
+    result,
+    surrogateScaleFactor: componentWidth / totalCalculatedWidth
+  })
+  
+  // Verify the calculation by measuring the surrogate text
+  if (measurementContainer.value) {
+    const verifyElement = document.createElement('span')
+    verifyElement.textContent = result
+    verifyElement.style.position = 'absolute'
+    verifyElement.style.visibility = 'hidden'
+    verifyElement.style.whiteSpace = 'nowrap'
+    verifyElement.style.fontFamily = 'Monaco, Menlo, Ubuntu Mono, monospace'
+    verifyElement.style.fontSize = '14px'
+    verifyElement.style.lineHeight = '1.5'
+    
+    measurementContainer.value.appendChild(verifyElement)
+    
+    nextTick(() => {
+      const actualSurrogateWidth = verifyElement.getBoundingClientRect().width
+      const widthDifference = Math.abs(componentWidth - actualSurrogateWidth)
+      
+      console.log('🔍 Width verification:', {
+        componentWidth,
+        actualSurrogateWidth,
+        widthDifference,
+        isAccurate: widthDifference < 2, // Within 2px tolerance
+        surrogateText: result
+      })
+      
+      if (widthDifference > 2) {
+        console.warn('⚠️ Width mismatch detected! Component and surrogate widths differ by', widthDifference, 'px')
+      }
+      
+      measurementContainer.value?.removeChild(verifyElement)
+    })
+  }
+  
+  return result
+}
+
+// Function to restore original text from rendered text
+function restoreOriginalText(rendered: string): string {
+  let restored = rendered
+  
+  // Replace surrogate patterns with original mentions
+  Object.entries(mentionMapping.value).forEach(([id, originalMention]) => {
+    const pattern = new RegExp(`\\[${id}\\]m*`, 'g')
+    restored = restored.replace(pattern, originalMention)
+  })
+  
+  return restored
+}
+
+// Function to convert original text to rendered text with surrogates
+function generateRenderedText(original: string): string {
+  let rendered = original
+  
+  // Find all mention URIs and replace with surrogates
+  rendered = rendered.replace(
+    /mention:\/\/([^\/\s]+)\/([^\s]+)/g,
+    (match, type, id) => {
+      const mentionData = mockMentionData.find(item => item.id === id && item.type === type)
+      if (mentionData) {
+        return generateSurrogateText(match, mentionData)
+      }
+      return match // Keep original if not found
+    }
+  )
+  
+  return rendered
+}
+
+// Function to render mention components as HTML with optional width adjustment
+function renderMentionComponent(mentionData: any, targetWidth?: number) {
   const { type, icon, title, subtitle, id } = mentionData
+  
+  // Calculate scale factor if target width is provided
+  let scaleStyle = ''
+  if (targetWidth) {
+    // We'll measure the component and apply a scale transform if needed
+    scaleStyle = ` data-target-width="${targetWidth}"`
+  }
   
   switch (type) {
     case 'custom_field':
-      return `<span class="mention mention-custom-field" data-id="${id}"><span class="mention-icon">${icon}</span><span class="mention-content"><span class="mention-title">${title}</span><span class="mention-value">${subtitle}</span></span></span>`
+      return `<span class="mention mention-custom-field" data-id="${id}"${scaleStyle}><span class="mention-icon">${icon}</span><span class="mention-content"><span class="mention-title">${title}</span><span class="mention-value">${subtitle}</span></span></span>`
       
     case 'observable':
-      return `<span class="mention mention-observable" data-id="${id}"><span class="mention-icon">${icon}</span><span class="mention-content"><span class="mention-title">${title}</span><span class="mention-subtitle">${subtitle}</span></span></span>`
+      return `<span class="mention mention-observable" data-id="${id}"${scaleStyle}><span class="mention-icon">${icon}</span><span class="mention-content"><span class="mention-title">${title}</span><span class="mention-subtitle">${subtitle}</span></span></span>`
       
     case 'note':
-      return `<span class="mention mention-note" data-id="${id}"><span class="mention-icon">${icon}</span><span class="mention-content"><span class="mention-title">${title}</span><span class="mention-subtitle">${subtitle}</span></span></span>`
+      return `<span class="mention mention-note" data-id="${id}"${scaleStyle}><span class="mention-icon">${icon}</span><span class="mention-content"><span class="mention-title">${title}</span><span class="mention-subtitle">${subtitle}</span></span></span>`
       
     case 'attachment':
-      return `<span class="mention mention-attachment" data-id="${id}"><span class="mention-icon">${icon}</span><span class="mention-content"><span class="mention-title">${title}</span><span class="mention-subtitle">${subtitle}</span></span></span>`
+      return `<span class="mention mention-attachment" data-id="${id}"${scaleStyle}><span class="mention-icon">${icon}</span><span class="mention-content"><span class="mention-title">${title}</span><span class="mention-subtitle">${subtitle}</span></span></span>`
       
     case 'event':
-      return `<span class="mention mention-event" data-id="${id}"><span class="mention-icon">${icon}</span><span class="mention-content"><span class="mention-title">${title}</span><span class="mention-subtitle">${subtitle}</span></span></span>`
+      return `<span class="mention mention-event" data-id="${id}"${scaleStyle}><span class="mention-icon">${icon}</span><span class="mention-content"><span class="mention-title">${title}</span><span class="mention-subtitle">${subtitle}</span></span></span>`
       
     case 'case':
-      return `<span class="mention mention-case" data-id="${id}"><span class="mention-icon">${icon}</span><span class="mention-content"><span class="mention-title">${title}</span><span class="mention-subtitle">${subtitle}</span></span></span>`
+      return `<span class="mention mention-case" data-id="${id}"${scaleStyle}><span class="mention-icon">${icon}</span><span class="mention-content"><span class="mention-title">${title}</span><span class="mention-subtitle">${subtitle}</span></span></span>`
       
     default:
-      return `<span class="mention mention-unknown" data-id="${id}"><span class="mention-icon">❓</span><span class="mention-content"><span class="mention-title">Unknown: ${title}</span></span></span>`
+      return `<span class="mention mention-unknown" data-id="${id}"${scaleStyle}><span class="mention-icon">❓</span><span class="mention-content"><span class="mention-title">Unknown: ${title}</span></span></span>`
   }
 }
 
@@ -378,24 +699,36 @@ function updateMentionPopupPosition() {
   })
 }
 
-function selectMention(item: any) {
+async function selectMention(item: any) {
   const ta = textarea.value
   if (!ta) return
 
-  // Create mention link in URI format only
-  const mentionLink = `mention://${item.type}/${item.id}`
+  // Create mention URI
+  const mentionURI = `mention://${item.type}/${item.id}`
   
-  // Replace @ with the mention link
-  const beforeMention = text.value.substring(0, mentionStartPosition.value)
-  const afterCaret = text.value.substring(ta.selectionStart)
+  // Generate surrogate text for this mention (now async with real measurements)
+  const surrogateText = await generateSurrogateText(mentionURI, item)
   
-  text.value = beforeMention + mentionLink + afterCaret
+  // Replace @ with the surrogate text in rendered text
+  const beforeMention = renderedText.value.substring(0, mentionStartPosition.value)
+  const afterCaret = renderedText.value.substring(ta.selectionStart)
+  
+  renderedText.value = beforeMention + surrogateText + afterCaret
+  
+  // Update original text
+  originalText.value = restoreOriginalText(renderedText.value)
   
   // Move caret to end of inserted mention
   nextTick(() => {
-    const newPosition = beforeMention.length + mentionLink.length
+    const newPosition = beforeMention.length + surrogateText.length
     ta.setSelectionRange(newPosition, newPosition)
     ta.focus()
+    
+    // Apply precision adjustments after content is rendered
+    setTimeout(() => {
+      applyPrecisionScaling()
+      adjustSurrogateSpacing()
+    }, 10)
   })
   
   hideMentionPopup()
@@ -475,9 +808,15 @@ function handleKeydown(event: KeyboardEvent) {
 }
 
 // Lifecycle
-onMounted(() => {
+onMounted(async () => {
+  console.log('🚀 Component mounted, initializing measurements...')
   syncScroll()
   updateMentionPopupPosition()
+  
+  // Initialize character width measurement
+  console.log('📐 Measuring character width...')
+  await measureCharWidth()
+  console.log('✅ Character width measurement complete:', CHAR_WIDTH_PX)
   
   // Add keyboard event listeners
   document.addEventListener('keydown', handleKeydown)
@@ -487,24 +826,161 @@ onMounted(() => {
 watch(text, () => {
   nextTick(() => {
     syncScroll()
+    applyPrecisionScaling()
   })
 })
+
+// Function to apply precision scaling to mention components
+function applyPrecisionScaling() {
+  if (!overlay.value) {
+    console.warn('⚠️ No overlay element for precision scaling')
+    return
+  }
+  
+  // Find all mention components with target width data
+  const mentionElements = overlay.value.querySelectorAll('.mention[data-target-width]')
+  console.log('🔍 Found mention elements for scaling:', mentionElements.length)
+  
+  mentionElements.forEach((element: Element, index: number) => {
+    const targetWidth = parseFloat(element.getAttribute('data-target-width') || '0')
+    if (targetWidth > 0) {
+      const actualWidth = element.getBoundingClientRect().width
+      const scaleFactor = targetWidth / actualWidth
+      const difference = targetWidth - actualWidth
+      
+      console.log(`🎯 Scaling analysis for element ${index}:`, {
+        targetWidth,
+        actualWidth,
+        scaleFactor,
+        difference,
+        shouldScale: Math.abs(difference) > 0.5
+      })
+      
+      // Only apply scaling if the difference is significant (> 0.5px)
+      if (Math.abs(difference) > 0.5) {
+        (element as HTMLElement).style.transform = `scaleX(${scaleFactor})`
+        (element as HTMLElement).style.transformOrigin = 'left center'
+        (element as HTMLElement).style.display = 'inline-block' // Ensure transform works
+        
+        console.log('✅ Applied precision scaling:', {
+          targetWidth,
+          actualWidth,
+          scaleFactor,
+          difference,
+          newWidth: actualWidth * scaleFactor
+        })
+        
+        // Verify the scaling worked
+        setTimeout(() => {
+          const newWidth = element.getBoundingClientRect().width
+          console.log('🔍 Scaling verification:', {
+            originalWidth: actualWidth,
+            targetWidth,
+            newWidth,
+            finalDifference: targetWidth - newWidth
+          })
+        }, 50)
+      } else {
+        console.log('ℹ️ Scaling not needed, difference too small:', difference)
+      }
+    }
+  })
+}
+
+// Function to adjust surrogate text spacing for precision
+function adjustSurrogateSpacing() {
+  console.log('🔧 Starting surrogate spacing adjustment...')
+  
+  if (!textarea.value || !overlay.value) {
+    console.warn('⚠️ Missing textarea or overlay for spacing adjustment')
+    return
+  }
+  
+  // Find mention components and calculate average width difference
+  const mentionElements = overlay.value.querySelectorAll('.mention[data-target-width]')
+  console.log('📏 Found mentions for spacing adjustment:', mentionElements.length)
+  
+  if (mentionElements.length === 0) {
+    console.log('ℹ️ No mentions found for spacing adjustment')
+    return
+  }
+  
+  let totalWidthDifference = 0
+  let totalSurrogateChars = 0
+  
+  mentionElements.forEach((element: Element) => {
+    const targetWidth = parseFloat(element.getAttribute('data-target-width') || '0')
+    const actualComponentWidth = element.getBoundingClientRect().width
+    
+    console.log('📊 Analyzing mention element:', {
+      targetWidth,
+      actualComponentWidth,
+      componentDifference: targetWidth - actualComponentWidth
+    })
+    
+    // The component is already perfect width, so we need to stretch the surrogate text
+    // to match the component width. The difference we need to make up is between
+    // the surrogate text width and the component width.
+    
+    // Get the surrogate ID to find the surrogate text
+    const surrogateId = element.getAttribute('data-id')
+    if (surrogateId && mentionMapping.value[surrogateId]) {
+      // Find the surrogate pattern in the rendered text
+      const surrogatePattern = renderedText.value.match(new RegExp(`\\[${surrogateId}\\](m*)`, 'g'))
+      if (surrogatePattern && surrogatePattern[0]) {
+        const mChars = surrogatePattern[0].match(/m/g)?.length || 0
+        const surrogateTextWidth = surrogatePattern[0].length * CHAR_WIDTH_PX
+        const widthDifference = actualComponentWidth - surrogateTextWidth
+        
+        console.log('📏 Surrogate analysis:', {
+          surrogatePattern: surrogatePattern[0],
+          mChars,
+          surrogateTextWidth,
+          actualComponentWidth,
+          widthDifference
+        })
+        
+        totalSurrogateChars += mChars
+        totalWidthDifference += widthDifference
+      }
+    }
+  })
+  
+  if (totalSurrogateChars > 0 && Math.abs(totalWidthDifference) > 0.5) {
+    // Calculate letter spacing needed to distribute the width difference
+    const letterSpacing = totalWidthDifference / totalSurrogateChars
+    
+    console.log('📏 Adjusting surrogate spacing:', {
+      totalWidthDifference,
+      totalSurrogateChars,
+      letterSpacing
+    })
+    
+    // Apply letter spacing to textarea
+    textarea.value.style.setProperty('--surrogate-letter-spacing', `${letterSpacing}px`)
+    textarea.value.classList.add('precise-spacing')
+  }
+}
 
 // Expose methods for parent components if needed
 defineExpose({
   focusTextarea: () => textarea.value?.focus(),
-  insertText: (text: string) => {
+  insertText: (textToInsert: string) => {
     if (!textarea.value) return
     const start = textarea.value.selectionStart
     const end = textarea.value.selectionEnd
-    const beforeCaret = text.value.substring(0, start)
-    const afterCaret = text.value.substring(end)
-    text.value = beforeCaret + text + afterCaret
+    const beforeCaret = renderedText.value.substring(0, start)
+    const afterCaret = renderedText.value.substring(end)
+    renderedText.value = beforeCaret + textToInsert + afterCaret
+    originalText.value = restoreOriginalText(renderedText.value)
     nextTick(() => {
-      const newPosition = start + text.length
+      const newPosition = start + textToInsert.length
       textarea.value?.setSelectionRange(newPosition, newPosition)
     })
-  }
+  },
+  getOriginalText: () => originalText.value,
+  getRenderedText: () => renderedText.value,
+  getMentionMapping: () => mentionMapping.value
 })
 </script>
 
@@ -663,6 +1139,11 @@ defineExpose({
   }
 }
 
+/* Letter spacing adjustment for surrogate text precision */
+.tq-textarea.precise-spacing {
+  letter-spacing: var(--surrogate-letter-spacing, 0px);
+}
+
 /* Highlight styling */
 :deep(mark) {
   background: linear-gradient(120deg, #a8e6cf 0%, #dcedc1 100%);
@@ -692,6 +1173,11 @@ defineExpose({
   * {
     margin: 0;
     padding: 0;
+  }
+  
+  /* Apply scaling if data-target-width is present */
+  &[data-target-width] {
+    transform-origin: left center;
   }
   
   .mention-icon {
@@ -971,6 +1457,16 @@ defineExpose({
   font-size: 14px;
 }
 
+/* Hidden measurement container */
+.measurement-container {
+  position: absolute;
+  top: -9999px;
+  left: -9999px;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: -1;
+}
+
 /* Debug info */
 .debug-info {
   position: absolute;
@@ -983,9 +1479,31 @@ defineExpose({
   border-radius: 6px;
   font-size: 12px;
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  max-width: 100%;
+  overflow-x: auto;
   
   p {
     margin: 4px 0;
+  }
+  
+  .debug-texts {
+    margin-top: 8px;
+    
+    div {
+      margin: 8px 0;
+      padding: 4px;
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 3px;
+      
+      code {
+        display: block;
+        white-space: pre-wrap;
+        word-break: break-all;
+        font-size: 10px;
+        color: #333;
+      }
+    }
   }
 }
 
