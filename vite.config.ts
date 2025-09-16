@@ -16,5 +16,5 @@ export default defineConfig({
     },
   },
   // GitHub Pages deployment configuration
-  base: process.env.NODE_ENV === 'production' ? '/textarea-overlay/' : '/',
+  base: process.env.GITHUB_PAGES === 'true' ? '/markdown-chip-demo/' : '/',
 })

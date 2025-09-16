@@ -24,7 +24,7 @@ Ensure your repository has the following permissions for GitHub Actions:
 
 - **Trigger**: Push to `main` or `master` branch
 - **Target**: GitHub Pages
-- **URL**: `https://[username].github.io/textarea-overlay/`
+- **URL**: `https://[username].github.io/markdown-chip-demo/`
 
 ## 🏗️ Build Process
 
@@ -74,7 +74,7 @@ npm run preview
 
 ### Vite Configuration
 
-- **Base Path**: `/textarea-overlay/` for production (GitHub Pages)
+- **Base Path**: `/markdown-chip-demo/` for production (GitHub Pages)
 - **Base Path**: `/` for development
 - **Environment**: Automatic detection via `NODE_ENV`
 
