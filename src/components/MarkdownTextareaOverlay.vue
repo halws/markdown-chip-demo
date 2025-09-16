@@ -175,8 +175,8 @@ const renderedMarkdown = computed(() => {
   // Sanitize the HTML
   return DOMPurify.sanitize(htmlContent, { 
     FORBID_TAGS: ['style'],
-    ALLOW_TAGS: ['span', 'mark', 'strong', 'em', 'code', 'pre', 'a', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'ul', 'ol', 'li', 'blockquote', 'br'],
-    ALLOW_ATTR: ['class', 'data-type', 'data-id', 'href', 'target', 'rel']
+    ALLOWED_TAGS: ['span', 'mark', 'strong', 'em', 'code', 'pre', 'a', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'ul', 'ol', 'li', 'blockquote', 'br'],
+    ALLOWED_ATTR: ['class', 'data-type', 'data-id', 'href', 'target', 'rel']
   })
 })
 
