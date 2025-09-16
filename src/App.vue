@@ -1,238 +1,163 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import MarkdownTextareaOverlay from './components/MarkdownTextareaOverlay.vue'
+import { demoText } from './data/demoContent'
 
 const showDebugInfo = ref(false)
-const autoShowMentions = ref(false)
-const readonlyMode = ref(false)
+const currentText = ref(demoText) // Reactive text that both components will share
 
-const demoText = `# AI-Enhanced Markdown Editor Demo
-
-This is a **comprehensive demo** of a Vue 3 component that combines:
-
-## 🎯 Key Features
-- Real-time markdown parsing and highlighting
-- Click-through overlay that doesn't interfere with typing
-- AI suggestions triggered by typing @
-- Synchronized scrolling and positioning
-- Full markdown support
-
-## 🚀 Try These Features:
-
-### Markdown Syntax:
-- **Bold text** and *italic text*
-- \`inline code\` and code blocks
-- [Links](https://example.com) that open in new tabs
-- Lists and other markdown elements
-
-### Object Mentions:
-- Type **@** anywhere to open the mention selector
-- Press **Ctrl+Space** to manually open mention selector
-- Search and select objects to reference
-- Press **Escape** to dismiss the selector
-
-### Technical Details:
-The overlay uses \`pointer-events: none\` for click-through behavior, while the AI popup uses \`pointer-events: auto\` for full interactivity. The \`textarea-caret\` library provides pixel-perfect caret positioning.
-
-**Try editing this text and watch the magic happen!** ✨`
+// Watch for changes in currentText
+watch(currentText, (newValue) => {
+  console.log('🏠 App.vue: currentText changed, length:', newValue.length)
+})
 </script>
 
 <template>
-  <div class="app">
-    <header class="app-header">
-      <h1>🤖 AI-Enhanced Markdown Editor</h1>
-      <p class="subtitle">
-        A Vue 3 demo combining markdown highlighting, overlay techniques, and AI suggestions
-      </p>
-      
-      <div class="controls">
-        <label class="control-item">
-          <input type="checkbox" v-model="showDebugInfo" />
-          Show Debug Info
-        </label>
-        <label class="control-item">
-          <input type="checkbox" v-model="autoShowMentions" />
-          Auto-show Mention Selector
-        </label>
-        <label class="control-item">
-          <input type="checkbox" v-model="readonlyMode" />
-          Readonly Mode (Markdown Rendering)
-        </label>
-      </div>
-    </header>
+  <v-app>
+    <v-app-bar color="primary" dark>
+      <v-app-bar-title>
+        <v-icon class="mr-2">mdi-robot</v-icon>
+        Markdown Editor with Mentions
+      </v-app-bar-title>
+      <v-spacer></v-spacer>
+      <v-switch
+        v-model="showDebugInfo"
+        label="Debug Info"
+        color="white"
+        hide-details
+        class="mr-4"
+      ></v-switch>
+    </v-app-bar>
 
-    <main class="app-main">
-      <MarkdownTextareaOverlay 
-        :initial-text="demoText"
-        :show-debug-info="showDebugInfo"
-        :auto-show-mentions="autoShowMentions"
-        :readonly="readonlyMode"
-      />
-      
-      <div class="instructions">
-        <h3>🎮 How to Use:</h3>
-        <ul>
-          <li><strong>Edit Mode:</strong> Type <kbd>@</kbd> to open mention selector</li>
-          <li><kbd>Ctrl</kbd> + <kbd>Space</kbd> - Manual mention selector</li>
-          <li><kbd>↑</kbd>/<kbd>↓</kbd> - Navigate mentions</li>
-          <li><kbd>Enter</kbd> - Select mention</li>
-          <li><kbd>Escape</kbd> - Dismiss selector</li>
-          <li><strong>Readonly Mode:</strong> Toggle to see full markdown rendering</li>
-          <li>Use standard markdown syntax in both modes</li>
-        </ul>
-      </div>
-    </main>
+    <v-main>
+      <v-container fluid class="pa-6">
+        <v-card class="mb-6" elevation="2">
+          <v-card-title class="text-h5">
+            <v-icon class="mr-2">mdi-map</v-icon>
+            Mention URI Mapping Guide
+          </v-card-title>
+          <v-card-text>
+            <v-row>
+              <v-col cols="12" md="6">
+                <v-card variant="outlined" class="h-100">
+                  <v-card-title class="text-h6">
+                    <v-icon class="mr-2">mdi-tag</v-icon>
+                    Custom Fields
+                  </v-card-title>
+                  <v-card-text>
+                    <v-list density="compact">
+                      <v-list-item>
+                        <template v-slot:prepend>
+                          <code class="text-caption">mention://custom_field/cf1</code>
+                        </template>
+                        <template v-slot:append>
+                          <v-chip color="pink" variant="elevated" size="small">@ comm_method • Slack</v-chip>
+                        </template>
+                        <v-icon class="mx-2">mdi-arrow-right</v-icon>
+                      </v-list-item>
+                      <v-list-item>
+                        <template v-slot:prepend>
+                          <code class="text-caption">mention://custom_field/cf2</code>
+                        </template>
+                        <template v-slot:append>
+                          <v-chip color="pink" variant="elevated" size="small">@ executor • John Doe</v-chip>
+                        </template>
+                        <v-icon class="mx-2">mdi-arrow-right</v-icon>
+                      </v-list-item>
+                      <v-list-item>
+                        <template v-slot:prepend>
+                          <code class="text-caption">mention://custom_field/cf3</code>
+                        </template>
+                        <template v-slot:append>
+                          <v-chip color="pink" variant="elevated" size="small">@ priority_level • Critical</v-chip>
+                        </template>
+                        <v-icon class="mx-2">mdi-arrow-right</v-icon>
+                      </v-list-item>
+                    </v-list>
+                  </v-card-text>
+                </v-card>
+              </v-col>
+            </v-row>
+          </v-card-text>
+        </v-card>
 
-    <footer class="app-footer">
-      <p>
-        Built with Vue 3, TypeScript, and the power of overlay techniques. 
-        <a href="https://github.com" target="_blank" rel="noopener">View Source</a>
-      </p>
-    </footer>
-  </div>
+        <!-- Editor Section -->
+        <v-row class="mt-6">
+          <v-col cols="12" md="6">
+            <v-card elevation="2">
+              <v-card-title class="text-h6">
+                <v-icon class="mr-2">mdi-pencil</v-icon>
+                Edit Mode (Raw Markdown)
+              </v-card-title>
+              <v-card-text>
+                <MarkdownTextareaOverlay 
+                  v-model="currentText"
+                  :show-debug-info="showDebugInfo"
+                  :readonly="false"
+                />
+              </v-card-text>
+            </v-card>
+          </v-col>
+          
+          <v-col cols="12" md="6">
+            <v-card elevation="2">
+              <v-card-title class="text-h6">
+                <v-icon class="mr-2">mdi-eye</v-icon>
+                Readonly Mode (Rendered Output)
+              </v-card-title>
+              <v-card-text>
+                <MarkdownTextareaOverlay 
+                  v-model="currentText"
+                  :readonly="true"
+                />
+              </v-card-text>
+            </v-card>
+          </v-col>
+        </v-row>
+
+        <!-- Usage Tips -->
+        <v-card class="mt-6" color="blue-grey-lighten-5">
+          <v-card-title class="text-h6">
+            <v-icon class="mr-2">mdi-lightbulb</v-icon>
+            Usage Tips
+          </v-card-title>
+          <v-card-text>
+            <v-list density="compact">
+              <v-list-item>
+                <template v-slot:prepend>
+                  <v-icon>mdi-content-copy</v-icon>
+                </template>
+                Copy any URI from above and paste it into the editor
+              </v-list-item>
+              <v-list-item>
+                <template v-slot:prepend>
+                  <v-icon>mdi-at</v-icon>
+                </template>
+                Type <kbd>@</kbd> to open the mention selector
+              </v-list-item>
+              <v-list-item>
+                <template v-slot:prepend>
+                  <v-icon>mdi-mouse</v-icon>
+                </template>
+                Hover over notes in readonly mode to see details
+              </v-list-item>
+            </v-list>
+          </v-card-text>
+        </v-card>
+      </v-container>
+    </v-main>
+  </v-app>
 </template>
 
 <style scoped>
-.app {
-  min-height: 100vh;
-  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-}
-
-.app-header {
-  text-align: center;
-  padding: 2rem 1rem;
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(10px);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.1);
-  
-  h1 {
-    margin: 0 0 0.5rem 0;
-    font-size: 2.5rem;
-    font-weight: 700;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-  }
-  
-  .subtitle {
-    margin: 0 0 1.5rem 0;
-    font-size: 1.1rem;
-    color: #6a737d;
-    max-width: 600px;
-    margin-left: auto;
-    margin-right: auto;
-  }
-}
-
-.controls {
-  display: flex;
-  justify-content: center;
-  gap: 2rem;
-  flex-wrap: wrap;
-  
-  .control-item {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.9rem;
-    color: #586069;
-    cursor: pointer;
-    
-    input[type="checkbox"] {
-      width: 16px;
-      height: 16px;
-      accent-color: #667eea;
-    }
-    
-    &:hover {
-      color: #24292e;
-    }
-  }
-}
-
-.app-main {
-  padding: 2rem 1rem;
-  max-width: 1200px;
-  margin: 0 auto;
-}
-
-.instructions {
-  margin-top: 2rem;
-  padding: 1.5rem;
-  background: rgba(255, 255, 255, 0.9);
-  border-radius: 12px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-  
-  h3 {
-    margin: 0 0 1rem 0;
-    color: #24292e;
-    font-size: 1.2rem;
-  }
-  
-  ul {
-    margin: 0;
-    padding-left: 1.5rem;
-    
-    li {
-      margin: 0.5rem 0;
-      color: #586069;
-      
-      kbd {
-        background: #f6f8fa;
-        border: 1px solid #d1d5da;
-        border-radius: 3px;
-        padding: 0.1em 0.3em;
-        font-size: 0.85em;
-        font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-      }
-      
-      code {
-        background: #f6f8fa;
-        padding: 0.1em 0.3em;
-        border-radius: 3px;
-        font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-        font-size: 0.85em;
-      }
-    }
-  }
-}
-
-.app-footer {
-  text-align: center;
-  padding: 2rem 1rem;
-  background: rgba(255, 255, 255, 0.5);
-  border-top: 1px solid rgba(0, 0, 0, 0.1);
-  
-  p {
-    margin: 0;
-    color: #6a737d;
-    font-size: 0.9rem;
-    
-    a {
-      color: #0366d6;
-      text-decoration: none;
-      
-      &:hover {
-        text-decoration: underline;
-      }
-    }
-  }
-}
-
-/* Responsive design */
-@media (max-width: 768px) {
-  .app-header h1 {
-    font-size: 2rem;
-  }
-  
-  .controls {
-    gap: 1rem;
-  }
-  
-  .app-main {
-    padding: 1rem;
-  }
+/* Minimal custom styles - Vuetify handles most styling */
+kbd {
+  background: #f5f5f5;
+  border: 1px solid #ddd;
+  border-radius: 3px;
+  padding: 0.1em 0.3em;
+  font-size: 0.85em;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 }
 </style>

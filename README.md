@@ -62,6 +62,20 @@ npm run build
 npm run type-check
 ```
 
+## 🚀 Deployment
+
+This project includes automated CI/CD with GitHub Actions:
+
+- **Production**: Deployed to GitHub Pages on push to `main`/`master`
+- **Testing**: Automated builds on Node.js 20 & 22
+
+### Quick Setup
+
+1. Enable GitHub Pages in repository settings
+2. Push to `main` branch to trigger deployment
+
+See [`.github/DEPLOYMENT.md`](.github/DEPLOYMENT.md) for detailed setup instructions.
+
 ## 🎮 Usage
 
 1. **Basic Editing**: Type in the textarea and see real-time markdown highlighting
